@@ -1,0 +1,84 @@
+@Library('obfuscation-lib')_
+
+pipeline { 
+    agent any
+    
+    environment { 
+        PROJECT_NAME = "Seatbelt"
+        PROJECT_FILE_PATH = "${env.PROJECT_NAME}.sln"
+        PROJECT_BASE_PATH = "C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\${env.PROJECT_NAME}\\${env.PROJECT_NAME}\\bin\\${CONFIG}"
+        
+        CONFIG = "Release"
+        PLATFORM = "Any CPU"
+        DOTNET_VERSION_TARGET = "3.5"
+        
+        THREATCHECK_PATH = "C:\\Tools\\ThreatCheck\\ThreatCheck.exe"
+        
+        ARTIFACT_PATH = "${PROJECT_BASE_PATH}\\${env.PROJECT_NAME}.exe"
+        
+        CONFUSER_PATH = "C:\\Tools\\NeoConfuserEx-Modified\\Debug\\bin\\Confuser.CLI.exe"
+        CONFUSER_TEMPLATE_PATH = "C:\\Dev\\build\\confuser-templates\\none.crproj"
+        CONFUSER_PROJECT_TEMPLATE_PATH = "C:\\Dev\\build\\confuser-templates\\${env.PROJECT_NAME}.crproj"
+        CONFUSED_BASE_PATH = "${PROJECT_BASE_PATH}\\confused"
+
+        DEPLOY_PATH = "C:\\Tools\\PipelineBinaries"
+    }
+    
+    stages {
+        stage('Clean') {
+            steps {
+                powershell """
+                Remove-Item -Force -Recurse -ErrorAction SilentlyContinue -Path ${CONFUSED_BASE_PATH}
+                Remove-Item -Force -Recurse -ErrorAction SilentlyContinue -Path ${CONFUSER_PROJECT_TEMPLATE_PATH}
+                """
+            }
+        }
+
+        stage('Checkout') {
+    	    steps {
+                git """https://github.com/GhostPack/${env.PROJECT_NAME}.git"""
+    	    }
+    	}
+
+        stage('Obfuscate') {
+            steps{
+                csharpOpsec()
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                bat "\"${tool 'MSBuild_VS2022'}\\MSBuild.exe\" /p:Configuration=${env.CONFIG} \"/p:Platform=${env.PLATFORM}\" /maxcpucount:%NUMBER_OF_PROCESSORS% /nodeReuse:false /p:TargetFrameworkMoniker=\".NETFramework,Version=v${DOTNET_VERSION_TARGET}\" ${env.PROJECT_FILE_PATH}" 
+            }
+        }
+
+        stage('Confuse') {
+            steps {
+                writeConfuserConfig(CONFUSED_BASE_PATH, PROJECT_BASE_PATH, env.PROJECT_NAME, CONFUSER_TEMPLATE_PATH, CONFUSER_PROJECT_TEMPLATE_PATH)
+                bat """${CONFUSER_PATH} -n ${CONFUSER_PROJECT_TEMPLATE_PATH}"""
+            }
+        }
+
+        stage('ThreatCheck') {
+            steps {
+                script {
+                    threatCheck(THREATCHECK_PATH, "${CONFUSED_BASE_PATH}\\${env.PROJECT_NAME}.exe")
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                runTestCommands(CONFUSED_BASE_PATH)
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                powershell """
+                Move-Item -Force -Path ${CONFUSED_BASE_PATH}\\${env.PROJECT_NAME}.exe -Destination ${DEPLOY_PATH}
+                """
+            }
+        }
+    }
+}
